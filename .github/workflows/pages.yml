@@ -32,10 +32,25 @@ jobs:
         run: uv sync
       - name: Build docs site (manifest, stats, year pages, OG image)
         run: uv run python scripts/build_docs.py
+      - name: Stage Pages artifact (merge docs/ + data/)
+        run: |
+          mkdir -p _site
+          cp -a docs/. _site/
+          # Serve the raw + parquet + actions files at /data/... so the
+          # URL patterns in api.html actually resolve. data/db is gitignored
+          # and rebuilt in the build step; skip data/derived (internal).
+          mkdir -p _site/data
+          cp -a data/raw      _site/data/
+          cp -a data/parquet  _site/data/
+          cp -a data/actions  _site/data/
+          [ -f data/state.json ] && cp data/state.json _site/data/ || true
+          # sanity
+          echo "artifact size:"; du -sh _site
+          echo "top-level entries:"; ls _site
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/
+          path: _site/
 
   deploy:
     needs: build
