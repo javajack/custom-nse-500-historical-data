@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- SEO -->
+  <title>nse-universe — Survivorship-Free NSE Bhavcopy Archive (2005–present)</title>
+  <meta name="description" content="Open archive of NSE daily bhavcopy zips and normalized Parquet from 2005 to today. Survivorship-bias-free. Includes a point-in-time custom index membership oracle (custom Nifty-50 / 100 / 500 / Midcap / Smallcap) for backtesting." />
+  <meta name="keywords" content="NSE bhavcopy, NSE historical data, Nifty 500 historical, survivorship bias free, Indian equity backtesting, point-in-time index, custom Nifty 50, parquet dataset, algorithmic trading India" />
+  <meta name="author" content="nse-universe" />
+  <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
+  <link rel="canonical" href="https://javajack.github.io/custom-nse-500-historical-data/" />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="nse-universe" />
+  <meta property="og:title" content="nse-universe — Survivorship-Free NSE Bhavcopy Archive" />
+  <meta property="og:description" content="21 years of NSE daily bhavcopy as zips + Parquet + monthly custom-index ranks. Open dataset for backtesting and research." />
+  <meta property="og:url" content="https://javajack.github.io/custom-nse-500-historical-data/" />
+  <meta property="og:image" content="https://javajack.github.io/custom-nse-500-historical-data/og.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="nse-universe: 21 years, 5256 trading days, 4166 symbols, survivorship-free." />
+  <meta property="og:locale" content="en_US" />
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="nse-universe — Survivorship-Free NSE Bhavcopy Archive" />
+  <meta name="twitter:description" content="21 years of NSE daily bhavcopy as zips + Parquet. Custom index membership oracle for backtesting." />
+  <meta name="twitter:image" content="https://javajack.github.io/custom-nse-500-historical-data/og.png" />
+
+  <!-- JSON-LD: Dataset schema for Google Dataset Search + Bing + LLMs -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Dataset",
+    "name": "nse-universe",
+    "alternateName": "NSE Bhavcopy Archive 2005–present",
+    "description": "Survivorship-bias-free archive of NSE (National Stock Exchange of India) daily equity bhavcopy from 2005 to today. Raw zip files preserved verbatim plus normalized columnar Parquet. Includes monthly rank snapshots by 6-month median turnover for custom Nifty-50 / 100 / 500 / Midcap-150 / Smallcap-250 point-in-time membership queries.",
+    "url": "https://javajack.github.io/custom-nse-500-historical-data/",
+    "keywords": ["NSE", "bhavcopy", "Nifty 500", "India equities", "survivorship bias free", "backtesting", "point in time", "custom index"],
+    "license": "https://github.com/javajack/custom-nse-500-historical-data/blob/main/README.md",
+    "creator": { "@type": "Organization", "name": "nse-universe" },
+    "distribution": [
+      {
+        "@type": "DataDownload",
+        "encodingFormat": "application/zip",
+        "contentUrl": "https://javajack.github.io/custom-nse-500-historical-data/data/raw/",
+        "description": "Original NSE bhavcopy zip files, one per trading day"
+      },
+      {
+        "@type": "DataDownload",
+        "encodingFormat": "application/vnd.apache.parquet",
+        "contentUrl": "https://javajack.github.io/custom-nse-500-historical-data/data/parquet/",
+        "description": "Hive-partitioned Parquet (year=YYYY/month=MM), EQ-series only, deterministic columns"
+      }
+    ],
+    "temporalCoverage": "2005-01-03/..",
+    "spatialCoverage": { "@type": "Place", "name": "India" },
+    "variableMeasured": [
+      { "@type": "PropertyValue", "name": "open", "unitText": "INR" },
+      { "@type": "PropertyValue", "name": "high", "unitText": "INR" },
+      { "@type": "PropertyValue", "name": "low",  "unitText": "INR" },
+      { "@type": "PropertyValue", "name": "close","unitText": "INR" },
+      { "@type": "PropertyValue", "name": "volume", "unitText": "shares" },
+      { "@type": "PropertyValue", "name": "turnover","unitText": "INR" },
+      { "@type": "PropertyValue", "name": "rank", "description": "Point-in-time rank 1..1000 by 6-month median turnover; resolves as_of monthly" }
+    ],
+    "measurementTechnique": "Public NSE bhavcopy archive, parsed and normalized; monthly rank computed by median daily turnover over prior 126 trading days",
+    "isAccessibleForFree": true
+  }
+  </script>
+
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+  <link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="site">
+      <a class="brand" href="./">nse-universe</a>
+      <nav>
+        <a href="./" class="active">Overview</a>
+        <a href="browse/">Browse</a>
+        <a href="api.html">API</a>
+        <a href="https://github.com/javajack/custom-nse-500-historical-data">GitHub</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <span class="tag">Open Dataset · Updated Daily</span>
+        <h1>Survivorship-free NSE bhavcopy, 2005 → today.</h1>
+        <p class="sub">Every daily zip NSE ever published, verbatim, plus normalized Parquet and monthly rank snapshots for point-in-time custom-index membership. Drop-in for Indian equity backtests.</p>
+      </section>
+
+      <section class="stats" id="stats">
+        <div class="stat"><span class="value" id="stat-years">21+</span><span class="label">years</span></div>
+        <div class="stat"><span class="value" id="stat-days">5,256</span><span class="label">trading days</span></div>
+        <div class="stat"><span class="value" id="stat-symbols">4,166</span><span class="label">distinct symbols</span></div>
+        <div class="stat"><span class="value" id="stat-rows">7.5M</span><span class="label">bhav rows</span></div>
+        <div class="stat"><span class="value" id="stat-ranks">249</span><span class="label">monthly snapshots</span></div>
+        <div class="stat"><span class="value" id="stat-size">680 MB</span><span class="label">total</span></div>
+      </section>
+
+      <h2>What's here</h2>
+      <div class="cards">
+        <a class="card" href="browse/">
+          <span class="card-title">Browse files</span>
+          <span class="card-desc">Year-by-year directory of every zip and Parquet. Filter by date, search by symbol, direct downloads.</span>
+        </a>
+        <a class="card" href="api.html">
+          <span class="card-title">Programmatic access</span>
+          <span class="card-desc">URL patterns, Python + curl snippets, OpenAPI spec for the local membership API.</span>
+        </a>
+        <a class="card" href="https://github.com/javajack/custom-nse-500-historical-data">
+          <span class="card-title">Source + ingester</span>
+          <span class="card-desc">The Python tool that produced this archive. curl_cffi TLS impersonation, DuckDB, Parquet. Reproducible.</span>
+        </a>
+        <a class="card" href="https://github.com/javajack/custom-nse-500-historical-data/blob/main/learning.md">
+          <span class="card-title">Learnings doc</span>
+          <span class="card-desc">NSE's dual-URL + dual-schema quirks, anti-bot stack, Parquet determinism — every trap we hit.</span>
+        </a>
+      </div>
+
+      <h2>What makes it useful</h2>
+      <ul>
+        <li><strong>Survivorship-bias-free.</strong> Every bhavcopy NSE ever published is retained, including days when now-delisted names traded. If a stock was on the tape, it's here.</li>
+        <li><strong>Point-in-time membership.</strong> 249 monthly rank snapshots of the top 1,000 symbols by 6-month median turnover. Query <code>members(date, index)</code> and get the universe as of that calendar day.</li>
+        <li><strong>Custom indices, not real Nifty.</strong> Define your own from the rank window: <code>nifty_50</code> = ranks 1–50, <code>midcap_150</code> = 101–250, <code>my_smallcap_bucket</code> = 351–500. Derived at query time; no rebuild.</li>
+        <li><strong>Two formats per day.</strong> Original zip (as-NSE-shipped, <code>cmDDMMMYYYYbhav.csv.zip</code> or <code>BhavCopy_NSE_CM_…</code>) and normalized Parquet with unified columns. Pick the one your pipeline prefers.</li>
+        <li><strong>Git-versioned.</strong> Byte-deterministic Parquet, immutable zips. Every update is a clean diff.</li>
+      </ul>
+
+      <h2>Quickstart</h2>
+      <p>Direct download of one day's Parquet:</p>
+      <pre><code>curl -O https://javajack.github.io/custom-nse-500-historical-data/data/parquet/year=2020/month=03/2020-03-20.parquet</code></pre>
+      <p>Or via the library locally:</p>
+      <pre><code>git clone https://github.com/javajack/custom-nse-500-historical-data
+cd nse-universe
+uv sync
+uv run python -c "
+from datetime import date
+from nse_universe import Universe
+u = Universe()
+print(u.members(date(2020, 3, 20), 'nifty_50'))
+"</code></pre>
+
+      <h2>Schema</h2>
+      <p>Normalized Parquet columns (same for every year — we reconcile legacy and new NSE formats at ingest):</p>
+      <dl>
+        <dt>symbol</dt>     <dd>NSE ticker, EQ series only (e.g. <code>RELIANCE</code>)</dd>
+        <dt>date</dt>       <dd>trading day (<code>DATE</code>)</dd>
+        <dt>open/high/low/close</dt><dd>INR, unadjusted for splits</dd>
+        <dt>prev_close</dt> <dd>previous close as printed by NSE</dd>
+        <dt>volume</dt>     <dd>shares traded (<code>BIGINT</code>)</dd>
+        <dt>turnover</dt>   <dd>rupee turnover (<code>DOUBLE</code>)</dd>
+        <dt>trades</dt>     <dd>trade count (nullable; absent in pre-mid-2011 NSE CSVs)</dd>
+        <dt>year / month</dt><dd>hive partition keys</dd>
+      </dl>
+
+      <h2>Caveats</h2>
+      <ul>
+        <li>Prices in Parquet are <strong>unadjusted</strong>. Use <code>data/actions/{SYMBOL}.parquet</code> (yfinance splits + dividends; ~66% symbol coverage) to compute adjustment factors, or bring your own adjusted price source.</li>
+        <li>Rank is <strong>6-month median turnover</strong>, not free-float market cap. For rank 1–200 the difference is ~1–2 names; at rank 450–500 it can be 5–10% different from the real Nifty 500. Fine for factor studies, not for index replication.</li>
+        <li>Membership rebalances <strong>monthly</strong>, first trading day. Stable between as_of_dates — intra-month churn invisible by design.</li>
+      </ul>
+    </main>
+
+    <footer class="site">
+      <span>https://javajack.github.io/custom-nse-500-historical-data</span>
+      <span>data updated <span id="last-update">—</span></span>
+    </footer>
+  </div>
+
+  <script>
+    // Populate the last-update footer from stats.json if available
+    fetch('stats.json').then(r => r.ok ? r.json() : null).then(s => {
+      if (!s) return;
+      document.getElementById('stat-days').textContent = (s.trading_days || '').toLocaleString();
+      document.getElementById('stat-symbols').textContent = (s.distinct_symbols || '').toLocaleString();
+      document.getElementById('stat-rows').textContent = (s.rows_bhav_display || (s.rows_bhav ? (s.rows_bhav/1e6).toFixed(1)+'M' : ''));
+      document.getElementById('stat-ranks').textContent = (s.rank_snapshots || '');
+      if (s.total_size_mb) document.getElementById('stat-size').textContent = s.total_size_mb + ' MB';
+      if (s.last_updated) document.getElementById('last-update').textContent = s.last_updated;
+    }).catch(() => {});
+  </script>
+</body>
+</html>

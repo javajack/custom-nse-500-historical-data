@@ -1,0 +1,15 @@
+{
+ "adj_events": 23519,
+ "distinct_symbols": 4166,
+ "first_date": "2005-01-03",
+ "generated_at": "2026-04-20T16:54:21+00:00",
+ "last_date": "2026-04-20",
+ "last_updated": "2026-04-20",
+ "rank_snapshots": 249,
+ "rows_bhav": 7542632,
+ "rows_bhav_display": "7.5M",
+ "symbols_with_actions": 1715,
+ "total_files_raw": 5256,
+ "total_size_mb": 653,
+ "trading_days": 5256
+}

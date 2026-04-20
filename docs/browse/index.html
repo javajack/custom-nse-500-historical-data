@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Browse Files · nse-universe</title>
+  <meta name="description" content="Year-by-year browser for every NSE bhavcopy zip and Parquet file in the nse-universe archive. Search by symbol, filter by date." />
+  <link rel="canonical" href="https://javajack.github.io/custom-nse-500-historical-data/browse/" />
+  <meta name="robots" content="index, follow" />
+
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="nse-universe" />
+  <meta property="og:title" content="Browse Files · nse-universe" />
+  <meta property="og:description" content="Every trading day since 2005. Direct download links for zip and Parquet." />
+  <meta property="og:url" content="https://javajack.github.io/custom-nse-500-historical-data/browse/" />
+  <meta property="og:image" content="https://javajack.github.io/custom-nse-500-historical-data/og.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:image" content="https://javajack.github.io/custom-nse-500-historical-data/og.png" />
+
+  <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg" />
+  <link rel="stylesheet" href="../assets/style.css" />
+</head>
+<body>
+  <div class="page wide">
+    <header class="site">
+      <a class="brand" href="../">nse-universe</a>
+      <nav>
+        <a href="../">Overview</a>
+        <a href="./" class="active">Browse</a>
+        <a href="../api.html">API</a>
+        <a href="https://github.com/javajack/custom-nse-500-historical-data">GitHub</a>
+      </nav>
+    </header>
+
+    <main>
+      <h1>Browse files</h1>
+      <p class="muted">Every trading day NSE has published since January 2005, both as the original zip and normalized Parquet. Pick a year to drill in, or search across the whole archive.</p>
+
+      <div class="filters">
+        <input type="search" id="q" placeholder="Search by date (e.g. 2020-03-20) or symbol…" autocomplete="off" />
+        <span class="count" id="count">loading manifest…</span>
+      </div>
+      <div id="results" class="hidden"></div>
+
+      <div id="years-section">
+        <h2>By year</h2>
+        <div class="year-grid" id="year-grid"></div>
+
+        <h2>Totals</h2>
+        <table>
+          <thead>
+            <tr><th>metric</th><th class="num">count</th></tr>
+          </thead>
+          <tbody id="totals"></tbody>
+        </table>
+      </div>
+    </main>
+
+    <footer class="site">
+      <span><a href="../">← overview</a></span>
+      <span>https://javajack.github.io/custom-nse-500-historical-data/browse/</span>
+    </footer>
+  </div>
+
+  <script src="../assets/browse.js" defer></script>
+</body>
+</html>

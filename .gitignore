@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# Pytest / caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Derived DuckDB (rebuildable from parquet + data/derived/ via menu)
+data/db/*.duckdb
+data/db/*.duckdb.wal
+# Note: data/derived/*.parquet IS committed — it holds universe_rank + adj_events
+# so CI builds can hydrate DuckDB without running the ranker/actions jobs.
+
+# Runtime logs
+logs/*.log
+logs/*.pid
+
+# Quarantine for malformed raw files
+data/raw/_quarantine/
+
+# Local state overrides (main state.json IS committed)
+data/state.local.json
+
+# OS
+.DS_Store
+Thumbs.db

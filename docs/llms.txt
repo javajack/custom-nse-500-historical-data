@@ -1,0 +1,54 @@
+# nse-universe
+
+> Open, survivorship-free archive of NSE (National Stock Exchange of India) daily equity bhavcopy data from 2005 to present, with point-in-time custom index membership snapshots for backtesting.
+
+This project mirrors NSE's public bhavcopy archive verbatim (as zips) and publishes a normalized Parquet derivative plus monthly rank snapshots. It lets backtests ask "on date D, which NSE symbols were in a custom Nifty-50 / 100 / 500 / Midcap-150 / Smallcap-250?" and get a deterministic answer with no survivorship bias.
+
+The rank metric is 6-month median daily turnover (stable proxy for market cap that doesn't require a free-float feed). Indices are defined as rank windows in a single YAML file — add your own custom index by editing config.
+
+## Overview
+
+- [Overview](/) — project description, stats, quickstart
+- [Browse files](/browse/) — year-by-year index of every zip + Parquet
+- [Programmatic access](/api.html) — URL patterns, Python + curl snippets, FastAPI spec
+- [Full learnings (GitHub)](https://github.com/javajack/custom-nse-500-historical-data/blob/main/learning.md) — technical field report: NSE dual-URL quirks, anti-bot stack, Parquet determinism
+- [Source code](https://github.com/javajack/custom-nse-500-historical-data) — ingester, ranker, library, FastAPI service
+
+## Dataset
+
+- Coverage: 2005-01-03 through today, ~5,256 trading days
+- Symbols: ~4,166 distinct (including delisted; survivorship-bias-free)
+- Files per day: one raw zip (as NSE publishes) + one normalized Parquet
+- Schema unification: legacy (SYMBOL/SERIES/…) and new (TckrSymb/SctySrs/…) NSE formats reconciled into a stable 10-column table
+- Size: ~680 MB total for 21 years; git-committed, byte-deterministic Parquet
+
+## Custom indices
+
+- `nifty_50`: rank 1–50
+- `nifty_100`: rank 1–100
+- `nifty_200`: rank 1–200
+- `nifty_500`: rank 1–500
+- `midcap_150`: rank 101–250
+- `smallcap_250`: rank 251–500
+- user-extensible via `config/indices.yml`
+
+## URL patterns
+
+- Raw zip (legacy, ≤~2024-07-05): `/data/raw/YYYY/MMM/cmDDMMMYYYYbhav.csv.zip`
+- Raw zip (new, ≥2024-07-08): `/data/raw/YYYY/MMM/BhavCopy_NSE_CM_0_0_0_YYYYMMDD_F_0000.csv.zip`
+- Normalized Parquet: `/data/parquet/year=YYYY/month=MM/YYYY-MM-DD.parquet`
+- Corporate actions: `/data/actions/{SYMBOL}.parquet`
+- Manifest: `/manifest.json` (machine-readable index of all files + sizes)
+- Stats: `/stats.json` (aggregate counts)
+
+## For agents / scrapers
+
+- All files are static. No auth. No rate limits under reasonable use.
+- Send a descriptive `User-Agent` so operators can reach you if something breaks.
+- Parquet is preferred over zips for analytical use — smaller, columnar, no parsing required.
+- Use `duckdb` with `httpfs` extension to SQL-query parquet files directly over HTTP without downloading them.
+
+## Optional
+
+- [Repository README](https://github.com/javajack/custom-nse-500-historical-data/blob/main/README.md) — user-facing docs for running the ingester locally
+- [OpenAPI spec](https://github.com/javajack/custom-nse-500-historical-data) — generated from the local FastAPI service, regenerate via `uv run python -c "from nse_universe.api.app import app; import json; print(json.dumps(app.openapi()))"`
