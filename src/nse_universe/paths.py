@@ -21,7 +21,13 @@ QUARANTINE_DIR: Path = RAW_DIR / "_quarantine"
 
 DB_PATH: Path = DB_DIR / "universe.duckdb"
 STATE_PATH: Path = DATA_DIR / "state.json"
-INDICES_CONFIG: Path = REPO_ROOT / "config" / "indices.yml"
+# Default to shipped config/indices.yml next to the repo root. Consumers
+# that install this package as a dep (outside the repo layout) can point
+# NSE_UNIVERSE_INDICES_CONFIG at any YAML to use their own rank windows.
+_DEFAULT_INDICES = REPO_ROOT / "config" / "indices.yml"
+INDICES_CONFIG: Path = Path(
+    os.environ.get("NSE_UNIVERSE_INDICES_CONFIG", str(_DEFAULT_INDICES))
+).expanduser()
 
 
 def ensure_dirs() -> None:
