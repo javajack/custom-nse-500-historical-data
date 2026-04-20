@@ -18,6 +18,12 @@ Intended as a standalone service: multiple algos / backtests can depend on it wi
 Requires [`uv`](https://github.com/astral-sh/uv) and Python ≥ 3.11.
 
 ```bash
+./start.sh                    # ensures venv + deps, launches interactive menu
+```
+
+Or manually:
+
+```bash
 uv sync                       # installs deps, creates .venv
 uv run nse-universe           # launches the menu
 ```
