@@ -191,6 +191,28 @@ class Universe:
                     asof_cache[asof] = [r[0] for r in rows]
                 yield d, asof_cache[asof]
 
+    # ------------- sector metadata -------------
+
+    def sector(self, symbol: str) -> str | None:
+        """NSE-sourced sector for a symbol (e.g. 'FINANCIALS'), or None."""
+        from nse_universe import sectors as _sectors
+        return _sectors.sector(symbol)
+
+    def sub_sector(self, symbol: str) -> str | None:
+        """NSE-sourced sub-sector for a symbol (e.g. 'BANKING_PRIVATE'), or None."""
+        from nse_universe import sectors as _sectors
+        return _sectors.sub_sector(symbol)
+
+    def classification(self, symbol: str):
+        """Full classification — sector, sub_sector, nse_industry, company, isin."""
+        from nse_universe import sectors as _sectors
+        return _sectors.classification(symbol)
+
+    def sectors_df(self) -> pd.DataFrame:
+        """All sector classifications as a DataFrame."""
+        from nse_universe import sectors as _sectors
+        return _sectors.all_classifications()
+
     # ------------- health / stats -------------
 
     def health(self) -> dict:

@@ -21,7 +21,11 @@ indices:
 
   nifty_500:
     rank_range: [1, 500]
-    description: "Top 500 — the universe ceiling"
+    description: "Top 500 by 6mo median turnover"
+
+  nifty_1000:
+    rank_range: [1, 1000]
+    description: "Top 1000 — the universe ceiling (deep tail included)"
 
   midcap_150:
     rank_range: [101, 250]
