@@ -25,7 +25,18 @@ class UnknownIndexError(KeyError):
 
 
 class Universe:
-    def __init__(self) -> None:
+    VALID_VERSIONS = ("v1", "v2")
+
+    def __init__(self, *, version: str = "v1") -> None:
+        if version not in self.VALID_VERSIONS:
+            raise ValueError(
+                f"version must be one of {self.VALID_VERSIONS}, got {version!r}"
+            )
+        self.version = version
+        self._table = "universe_rank" if version == "v1" else "universe_v2"
+        # v2 filter — must come after all other WHERE conditions; alias-aware
+        # variants are applied per-method.
+        self._passes_filter = "" if version == "v1" else " AND passes = TRUE"
         self._indices: Mapping[str, IndexSpec] = load_indices()
 
     # ------------- introspection -------------
@@ -48,7 +59,9 @@ class Universe:
     def as_of_for(self, d: date) -> date | None:
         with db(read_only=True) as con:
             row = con.execute(
-                "SELECT MAX(as_of_date) FROM universe_rank WHERE as_of_date <= ?", [d]
+                f"SELECT MAX(as_of_date) FROM {self._table} "
+                f"WHERE as_of_date <= ?{self._passes_filter}",
+                [d],
             ).fetchone()
         return row[0] if row and row[0] else None
 
@@ -61,10 +74,10 @@ class Universe:
             return []
         with db(read_only=True) as con:
             rows = con.execute(
-                """
+                f"""
                 SELECT symbol
-                  FROM universe_rank
-                 WHERE as_of_date = ? AND rank BETWEEN ? AND ?
+                  FROM {self._table}
+                 WHERE as_of_date = ? AND rank BETWEEN ? AND ?{self._passes_filter}
                  ORDER BY rank
                 """,
                 [asof, spec.rank_lo, spec.rank_hi],
@@ -77,7 +90,8 @@ class Universe:
             return None
         with db(read_only=True) as con:
             row = con.execute(
-                "SELECT rank FROM universe_rank WHERE as_of_date = ? AND symbol = ?",
+                f"SELECT rank FROM {self._table} "
+                f"WHERE as_of_date = ? AND symbol = ?{self._passes_filter}",
                 [asof, symbol],
             ).fetchone()
         return int(row[0]) if row else None
@@ -92,12 +106,16 @@ class Universe:
         asof = self.as_of_for(d)
         if asof is None:
             return pd.DataFrame(columns=["rank", "symbol", "metric_value", "as_of_date"])
+        metric_col = (
+            "metric_value" if self.version == "v1"
+            else "med_turnover_126d AS metric_value"
+        )
         with db(read_only=True) as con:
             df = con.execute(
-                """
-                SELECT rank, symbol, metric_value
-                  FROM universe_rank
-                 WHERE as_of_date = ?
+                f"""
+                SELECT rank, symbol, {metric_col}
+                  FROM {self._table}
+                 WHERE as_of_date = ?{self._passes_filter}
                  ORDER BY rank
                 """,
                 [asof],
@@ -112,9 +130,15 @@ class Universe:
         Good for factor-backtest joins.
         """
         spec = self.index_spec(index)
+        ur_passes = (
+            "" if self.version == "v1" else " AND ur.passes = TRUE"
+        )
+        inner_passes = (
+            "" if self.version == "v1" else " AND passes = TRUE"
+        )
         with db(read_only=True) as con:
             df = con.execute(
-                """
+                f"""
                 WITH days AS (
                     SELECT DISTINCT date AS trading_day
                       FROM bhav_daily
@@ -122,9 +146,9 @@ class Universe:
                 ),
                 asof_for_day AS (
                     SELECT days.trading_day,
-                           (SELECT MAX(ur.as_of_date)
-                              FROM universe_rank ur
-                             WHERE ur.as_of_date <= days.trading_day) AS as_of_date
+                           (SELECT MAX(as_of_date)
+                              FROM {self._table}
+                             WHERE as_of_date <= days.trading_day{inner_passes}) AS as_of_date
                       FROM days
                 )
                 SELECT a.trading_day AS date,
@@ -132,8 +156,8 @@ class Universe:
                        ur.rank,
                        a.as_of_date
                   FROM asof_for_day a
-                  JOIN universe_rank ur ON ur.as_of_date = a.as_of_date
-                 WHERE ur.rank BETWEEN ? AND ?
+                  JOIN {self._table} ur ON ur.as_of_date = a.as_of_date
+                 WHERE ur.rank BETWEEN ? AND ?{ur_passes}
                  ORDER BY a.trading_day, ur.rank
                 """,
                 [start, end_inclusive, spec.rank_lo, spec.rank_hi],
@@ -174,16 +198,18 @@ class Universe:
             asof_cache: dict[date, list[str]] = {}
             for d in dates:
                 asof = con.execute(
-                    "SELECT MAX(as_of_date) FROM universe_rank WHERE as_of_date <= ?", [d]
+                    f"SELECT MAX(as_of_date) FROM {self._table} "
+                    f"WHERE as_of_date <= ?{self._passes_filter}",
+                    [d],
                 ).fetchone()[0]
                 if asof is None:
                     yield d, []
                     continue
                 if asof not in asof_cache:
                     rows = con.execute(
-                        """
-                        SELECT symbol FROM universe_rank
-                         WHERE as_of_date = ? AND rank BETWEEN ? AND ?
+                        f"""
+                        SELECT symbol FROM {self._table}
+                         WHERE as_of_date = ? AND rank BETWEEN ? AND ?{self._passes_filter}
                          ORDER BY rank
                         """,
                         [asof, spec.rank_lo, spec.rank_hi],

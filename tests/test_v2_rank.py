@@ -6,30 +6,13 @@ in core/db.py).
 """
 from __future__ import annotations
 
-import importlib
 from datetime import date, timedelta
 
 import duckdb
 import pytest
 
 
-@pytest.fixture
-def isolated_data_dir(tmp_path, monkeypatch):
-    """Point nse_universe at a fresh data dir and reload modules that
-    captured PARQUET_DIR / DB_PATH at import time."""
-    monkeypatch.setenv("NSE_UNIVERSE_DATA_DIR", str(tmp_path))
-
-    import nse_universe.paths
-    import nse_universe.core.db
-    import nse_universe.core.export
-    import nse_universe.rank.filters
-    import nse_universe.rank.v2
-    importlib.reload(nse_universe.paths)
-    importlib.reload(nse_universe.core.db)
-    importlib.reload(nse_universe.core.export)
-    importlib.reload(nse_universe.rank.filters)
-    importlib.reload(nse_universe.rank.v2)
-    yield tmp_path
+# isolated_data_dir fixture is provided by conftest.py
 
 
 def _write_bhav_parquet(parquet_dir, symbol_specs):
