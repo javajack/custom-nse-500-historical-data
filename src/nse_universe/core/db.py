@@ -21,7 +21,7 @@ import duckdb
 
 from nse_universe.paths import DB_PATH, PARQUET_DIR, ensure_dirs
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _INTERNAL_DDL: tuple[str, ...] = (
     """
@@ -78,6 +78,47 @@ _INTERNAL_DDL: tuple[str, ...] = (
         last_seen  DATE NOT NULL,
         days_seen  INTEGER NOT NULL
     )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS universe_v2 (
+        as_of_date           DATE    NOT NULL,
+        symbol               VARCHAR NOT NULL,
+        rank                 INTEGER NOT NULL,
+        passes               BOOLEAN NOT NULL,
+        med_turnover_60d     DOUBLE,
+        med_turnover_126d    DOUBLE,
+        traded_pct_60d       DOUBLE,
+        trading_days_history INTEGER,
+        close_asof           DOUBLE,
+        cv_turnover_126d     DOUBLE,
+        circuit_pct_60d      DOUBLE,
+        gsm_stage            INTEGER,
+        asm_stage            INTEGER,
+        vol_annualized_60d   DOUBLE,
+        exclude_reason       VARCHAR,
+        PRIMARY KEY (as_of_date, symbol)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_universe_v2_passes
+        ON universe_v2(as_of_date, passes)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_universe_v2_rank
+        ON universe_v2(as_of_date, rank)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS surveillance_daily (
+        date       DATE    NOT NULL,
+        symbol     VARCHAR NOT NULL,
+        gsm_stage  INTEGER,
+        asm_stage  INTEGER,
+        source     VARCHAR NOT NULL,
+        PRIMARY KEY (date, symbol, source)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_surv_date ON surveillance_daily(date)
     """,
 )
 
