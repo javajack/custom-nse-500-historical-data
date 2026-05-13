@@ -42,6 +42,8 @@ MENU_SYNC = "Sync bhavcopy (auto-detect missing trading days)"
 MENU_INGEST = "Ingest pending zips into parquet"
 MENU_ACTIONS = "Refresh corporate actions (yfinance)"
 MENU_RANK = "Recompute monthly rankings"
+MENU_V2 = "Rebuild universe v2 (momentum filter-stack)"
+MENU_SURVEILLANCE = "Refresh surveillance feed (NSE GSM/ASM)"
 MENU_FULL = "Full pipeline: sync → ingest → rank → actions"
 MENU_QUERY = "Query universe (date + index)"
 MENU_HEALTH = "Data health / stats"
@@ -51,7 +53,8 @@ MENU_API = "Start API server"
 MENU_EXIT = "Exit"
 
 MAIN_CHOICES = [
-    MENU_SYNC, MENU_INGEST, MENU_ACTIONS, MENU_RANK, MENU_FULL,
+    MENU_SYNC, MENU_INGEST, MENU_ACTIONS, MENU_RANK,
+    MENU_V2, MENU_SURVEILLANCE, MENU_FULL,
     MENU_QUERY, MENU_HEALTH, MENU_VERIFY, MENU_REBUILD, MENU_API, MENU_EXIT,
 ]
 
@@ -172,6 +175,42 @@ def action_rank() -> None:
 
         stats = recompute_all(force=force, progress_cb=cb)
     console.print(f"[green]ranked {stats.as_of_dates} snapshots, {stats.total_rows} rows[/green]")
+
+
+def action_rebuild_v2() -> None:
+    from nse_universe.rank.v2 import recompute_v2_all
+
+    force = questionary.confirm(
+        "Force recompute ALL as_of_dates for v2 (slow)? No = incremental.",
+        default=False,
+    ).ask()
+    if force is None:
+        return
+
+    console.print("[cyan]computing universe v2 (filter stack) …[/cyan]")
+    with _make_progress() as prog:
+        task = prog.add_task("v2", total=None)
+
+        def cb(i: int, n: int, d: date, n_pass: int):
+            prog.update(task, completed=i, total=n,
+                        description=f"v2 {d} ({n_pass} passers)")
+
+        stats = recompute_v2_all(force=force, progress_cb=cb)
+    console.print(
+        f"[green]v2 ranked {stats.as_of_dates} snapshots, "
+        f"{stats.total_passers} total passers[/green]"
+    )
+
+
+def action_surveillance() -> None:
+    from nse_universe.ingest.surveillance import ingest_today
+
+    console.print("[cyan]fetching NSE GSM/ASM live feed …[/cyan]")
+    try:
+        n = ingest_today()
+        console.print(f"[green]ingested {n} surveillance rows for today[/green]")
+    except Exception as e:
+        console.print(f"[red]surveillance fetch failed: {e}[/red]")
 
 
 def action_actions() -> None:
@@ -362,6 +401,8 @@ def main() -> None:
                 MENU_INGEST: action_ingest,
                 MENU_ACTIONS: action_actions,
                 MENU_RANK: action_rank,
+                MENU_V2: action_rebuild_v2,
+                MENU_SURVEILLANCE: action_surveillance,
                 MENU_FULL: action_full_pipeline,
                 MENU_QUERY: action_query,
                 MENU_HEALTH: action_health,
