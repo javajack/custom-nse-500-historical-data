@@ -21,6 +21,7 @@ from datetime import date
 
 from nse_universe.core.db import db
 from nse_universe.core.export import export_all
+from nse_universe.rank.deny import is_non_equity
 from nse_universe.rank.filters import _metrics_from_con, _proxy_from_con
 
 log = logging.getLogger(__name__)
@@ -56,8 +57,10 @@ class V2BatchStats:
     total_passers: int = 0
 
 
-def _exclude_reason(m: dict, gsm: int, asm: int, cfg: V2Config) -> str | None:
+def _exclude_reason(m: dict, gsm: int, asm: int, cfg: V2Config, *, symbol: str | None = None) -> str | None:
     """Return the first failing filter (or None if all pass)."""
+    if symbol is not None and is_non_equity(symbol):
+        return "non_equity"
     if (m.get("trading_days_history") or 0) < cfg.min_trading_days:
         return f"history<{cfg.min_trading_days}d"
     if (m.get("traded_pct_60d") or 0.0) < cfg.min_traded_pct_60d:
@@ -137,7 +140,7 @@ def recompute_v2_for(as_of_date: date, cfg: V2Config = DEFAULT_V2_CONFIG) -> int
         scored: list[tuple[str, dict, int, int, str | None]] = []
         for sym, m in metrics.items():
             g, a = gsm_asm.get(sym, (0, 0))
-            reason = _exclude_reason(m, g, a, cfg)
+            reason = _exclude_reason(m, g, a, cfg, symbol=sym)
             scored.append((sym, m, g, a, reason))
 
         survivors = [s for s in scored if s[4] is None]
