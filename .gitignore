@@ -12,6 +12,7 @@ wheels/
 # IDEs
 .vscode/
 .idea/
+.claude/
 *.swp
 
 # Pytest / caches
