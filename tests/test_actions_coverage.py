@@ -124,7 +124,8 @@ def test_list_reprobes_parked_symbol_after_window():
     assert "MAYBE_BACK" in syms
 
 
-def test_update_coverage_parks_after_threshold():
+def test_update_coverage_parks_after_threshold(monkeypatch):
+    monkeypatch.setattr(fetch, "_has_actions_data", lambda s: False)
     con = _fresh_con()
     # first no_data → counted, not yet parked
     _update_coverage(con, {"GONE": "no_data"}, TODAY, park_threshold=2)
@@ -153,9 +154,41 @@ def test_update_coverage_reset_and_unpark_on_ok():
     assert row == ("ok", 0, False, TODAY)
 
 
-def test_update_coverage_error_counts_as_no_data():
+def test_update_coverage_error_counts_as_no_data(monkeypatch):
+    monkeypatch.setattr(fetch, "_has_actions_data", lambda s: False)
     con = _fresh_con()
     _update_coverage(con, {"X": "error"}, TODAY, park_threshold=2)
     _update_coverage(con, {"X": "error"}, TODAY + timedelta(days=1), park_threshold=2)
     parked = con.execute("SELECT parked FROM yf_coverage WHERE symbol='X'").fetchone()[0]
     assert parked is True
+
+
+def test_update_coverage_never_parks_proven_coverage(monkeypatch):
+    """A symbol with an existing actions parquet (proven coverage) is never
+    parked, however many consecutive misses — its misses are throttling."""
+    con = _fresh_con()
+    # REALSTOCK has a parquet on disk; ETFX never has
+    monkeypatch.setattr(fetch, "_has_actions_data", lambda s: s == "REALSTOCK")
+    for i in range(4):
+        _update_coverage(
+            con, {"REALSTOCK": "no_data", "ETFX": "no_data"},
+            TODAY + timedelta(days=i), park_threshold=2,
+        )
+    got = {s: (c, p) for s, c, p in con.execute(
+        "SELECT symbol, consecutive_no_data, parked FROM yf_coverage").fetchall()}
+    assert got["REALSTOCK"] == (4, False)   # 4 misses, still not parked
+    assert got["ETFX"][1] is True           # parked
+
+
+def test_update_coverage_prior_success_protects(monkeypatch):
+    """A symbol whose cache row already has last_ok (succeeded before) is not
+    parked on later misses even without a parquet on disk."""
+    con = _fresh_con()
+    monkeypatch.setattr(fetch, "_has_actions_data", lambda s: False)
+    con.execute(
+        "INSERT INTO yf_coverage VALUES ('WASOK','ok',0,FALSE,?,?)",
+        [TODAY - timedelta(days=10), TODAY - timedelta(days=10)],
+    )
+    _update_coverage(con, {"WASOK": "no_data"}, TODAY, park_threshold=1)
+    parked = con.execute("SELECT parked FROM yf_coverage WHERE symbol='WASOK'").fetchone()[0]
+    assert parked is False

@@ -88,6 +88,9 @@ def wired(monkeypatch):
     monkeypatch.setattr(fetch, "_write_symbol_parquet", lambda *a, **k: None)
     monkeypatch.setattr(fetch, "_upsert_events", lambda *a, **k: None)
     monkeypatch.setattr(fetch, "export_all", lambda *a, **k: None)
+    # isolate parking from the real data/actions dir: no symbol has a parquet,
+    # so DEAD (never ok) parks while LIVE stays governed by its scripted outcome
+    monkeypatch.setattr(fetch, "_has_actions_data", lambda s: False)
 
     class Handle:
         pass

@@ -147,7 +147,9 @@ def _update_coverage(
     """Record each attempted symbol's outcome in the yf_coverage cache.
 
     'ok' resets the streak and un-parks; anything else ('no_data' / 'error')
-    increments the consecutive-miss counter and parks at `park_threshold`.
+    increments the consecutive-miss counter and parks at `park_threshold` —
+    but only for symbols without proven coverage (see the parking guard below),
+    so throttled misses never park a live stock.
     """
     if not outcomes:
         return
@@ -164,8 +166,16 @@ def _update_coverage(
             rows.append((sym, "ok", 0, False, today, today))
         else:
             streak = prev_streak + 1
-            rows.append((sym, "no_data", streak, streak >= park_threshold,
-                         today, prev_last_ok))
+            # Only park symbols with NO proven coverage. A symbol that has ever
+            # returned actions (a prior 'ok', or an existing per-symbol parquet
+            # from an earlier run) is a real, covered instrument — a current miss
+            # is a Yahoo throttle, not a delisting, so it must not be parked.
+            # This is the key guard against a heavily-throttled bulk run parking
+            # live stocks (ADANIGREEN, AAVAS, …) alongside genuine ETFs / dead
+            # tickers, which never produce actions and legitimately park.
+            proven = prev_last_ok is not None or _has_actions_data(sym)
+            parked = streak >= park_threshold and not proven
+            rows.append((sym, "no_data", streak, parked, today, prev_last_ok))
     staging = pd.DataFrame(
         rows,
         columns=["symbol", "status", "consecutive_no_data",
@@ -245,6 +255,13 @@ def _fetch_one(symbol: str, *, sleep_s: float = 0.25) -> tuple[ActionsStats, pd.
     stats.splits = int((df["kind"] == "split").sum())
     stats.dividends = int((df["kind"] == "dividend").sum())
     return stats, df
+
+
+def _has_actions_data(symbol: str) -> bool:
+    """True if a per-symbol actions parquet already exists — i.e. the symbol
+    has produced real corporate actions at least once. Used as a durable
+    "proven coverage" signal so throttled misses don't park live stocks."""
+    return (ACTIONS_DIR / f"{symbol}.parquet").exists()
 
 
 def _write_symbol_parquet(symbol: str, df: pd.DataFrame) -> Path:
