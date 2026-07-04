@@ -19,7 +19,38 @@ from typing import Iterator
 
 import duckdb
 
+try:
+    import resource  # POSIX only
+except ImportError:  # pragma: no cover - non-POSIX
+    resource = None  # type: ignore[assignment]
+
 from nse_universe.paths import DB_PATH, PARQUET_DIR, ensure_dirs
+
+# bhav_daily is a view over one parquet file per trading day (~5k and growing).
+# Some scans — notably the surveillance-proxy query in rank/filters.py — make
+# DuckDB open a handle for *every* partition file at once, which overflows the
+# common 1024 soft NOFILE limit and raises "IO Error: ... Too many open files".
+# Lift the soft limit toward the hard cap so scans scale with the dataset.
+_MIN_FD_SOFT = 65536
+
+
+def _raise_fd_limit(minimum: int = _MIN_FD_SOFT) -> None:
+    """Raise the process soft NOFILE limit to at least `minimum` (capped by the
+    hard limit). Idempotent and best-effort — never raises."""
+    if resource is None:
+        return
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except (ValueError, OSError):
+        return
+    if soft == resource.RLIM_INFINITY:
+        return
+    target = minimum if hard == resource.RLIM_INFINITY else min(minimum, hard)
+    if soft < target:
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+        except (ValueError, OSError):
+            pass
 
 SCHEMA_VERSION = 3
 
@@ -194,6 +225,7 @@ def open_db(path: Path | None = None, *, read_only: bool = False) -> duckdb.Duck
     does this automatically.
     """
     ensure_dirs()
+    _raise_fd_limit()
     target = path or DB_PATH
     if read_only and not target.exists():
         # bootstrap: read-only open requires the file to exist
