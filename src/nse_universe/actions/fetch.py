@@ -59,6 +59,29 @@ FRESH_DAYS = 7
 YF_RETRIES = 3
 YF_TIMEOUT = 30
 
+# Yahoo symbol remap for NSE tickers whose Yahoo listing moved (demergers,
+# renames) so `{SYMBOL}.NS` returns empty history. Each entry is the ordered
+# list of Yahoo tickers to try *instead of* the default; the recovered actions
+# are still stored under the NSE symbol. Every remap must be verified (the
+# candidate returns the pre-event history + actions) before being added here.
+#
+#   TATAMOTORS — 2025 demerger. Yahoo migrated the full Tata Motors history
+#   (all dividends + splits, back to listing) onto the Passenger Vehicles
+#   ticker TMPV; TATAMOTORS.NS/.BO now return empty. Verified 2026-07: TMPV.NS
+#   → 8962 rows, 25 dividends, 2 splits.
+SYMBOL_REMAP: dict[str, list[str]] = {
+    "TATAMOTORS": ["TMPV.NS", "TMPV.BO"],
+}
+
+
+def _candidates(symbol: str) -> list[str]:
+    """Ordered Yahoo tickers to try for one NSE symbol. Explicit remaps win;
+    otherwise try the NSE listing then the BSE listing (`.BO`), which Yahoo
+    often serves when the `.NS` feed is broken."""
+    if symbol in SYMBOL_REMAP:
+        return SYMBOL_REMAP[symbol]
+    return [f"{symbol}.NS", f"{symbol}.BO"]
+
 
 class _RateLimiter:
     """Thread-safe minimum-interval limiter: at most `rate_per_sec` acquisitions
@@ -89,8 +112,9 @@ class ActionsStats:
     symbol: str
     splits: int = 0
     dividends: int = 0
-    status: str = "ok"       # ok | no_data | error
+    status: str = "ok"       # ok | no_actions | no_data | error
     error: str | None = None
+    matched: str | None = None   # Yahoo ticker that actually served the data
 
 
 @dataclass
@@ -257,52 +281,33 @@ def _update_coverage(
     con.unregister("_cov_staging")
 
 
-def _fetch_one(
-    symbol: str, *, sleep_s: float = 0.0, limiter: "_RateLimiter | None" = None,
-) -> tuple[ActionsStats, pd.DataFrame | None]:
-    """Pull splits + dividends for one NSE symbol via yfinance.
+def _fetch_candidate(
+    ytk: str, symbol: str, limiter: "_RateLimiter | None",
+) -> tuple[str, pd.DataFrame | None, str | None]:
+    """Fetch actions for a single Yahoo ticker `ytk`, storing under NSE `symbol`.
 
-    `limiter`, when supplied, paces the yfinance call to stay under Yahoo's
-    throttle (shared across all worker threads). `sleep_s` is a legacy per-call
-    delay, now 0 by default since the limiter handles pacing.
+    Returns (kind, df, err) where kind is one of:
+      * 'ok'            — has dividends/splits (df populated)
+      * 'no_actions'    — history exists but no dividends/splits (definitive)
+      * 'empty_history' — Yahoo returned no price history (miss; try next ticker)
+      * 'error'         — unexpected failure (err set; try next ticker)
     """
-    stats = ActionsStats(symbol=symbol)
     if limiter is not None:
         limiter.acquire()
     try:
-        tkr = yf.Ticker(f"{symbol}.NS")
-        actions = tkr.actions
+        actions = yf.Ticker(ytk).actions
     except AttributeError as e:
         # yfinance 1.3.x raises "'PriceHistory' object has no attribute
-        # '_dividends'" when the underlying price history came back empty —
-        # a Yahoo throttle transient or a genuinely delisted symbol. That's
-        # "no usable data", not an unexpected error: classify as no_data so it
-        # flows through the retry pass and the yf_coverage cache cleanly instead
-        # of polluting the gaps list with a stack-trace string.
+        # '_dividends'" when the underlying price history came back empty.
         if "_dividends" in str(e) or "_splits" in str(e):
-            # empty price history → real miss (throttle / gap / delisted)
-            stats.status = "no_data"
-        else:
-            stats.status = "error"
-            stats.error = str(e)[:200]
-        return stats, None
+            return "empty_history", None, None
+        return "error", None, str(e)[:200]
     except Exception as e:
-        stats.status = "error"
-        stats.error = str(e)[:200]
-        return stats, None
-    finally:
-        if sleep_s:
-            time.sleep(sleep_s)
+        return "error", None, str(e)[:200]
 
-    # An empty *frame* (not a raise) means history exists but the symbol has no
-    # dividends/splits — a definitive answer, distinct from an empty-history
-    # miss. Mark it 'no_actions' so the freshness cache can skip it and the
-    # retry/park machinery leaves it alone.
     if actions is None or actions.empty:
-        stats.status = "no_actions"
-        return stats, None
+        return "no_actions", None, None
 
-    # tidy: flatten to (event_date, kind, ratio) rows
     frames = []
     if "Stock Splits" in actions.columns:
         sp = actions.loc[actions["Stock Splits"] != 0, ["Stock Splits"]].copy()
@@ -316,21 +321,59 @@ def _fetch_one(
         frames.append(dv)
 
     if not frames:
-        stats.status = "no_actions"
-        return stats, None
+        return "no_actions", None, None
 
     df = pd.concat(frames)
     df = df.reset_index().rename(columns={"Date": "event_date"})
-    # Normalize timestamp → date
     df["event_date"] = pd.to_datetime(df["event_date"]).dt.date
     df["symbol"] = symbol
     df["source"] = "yfinance"
     df = df[["symbol", "event_date", "kind", "ratio", "source"]]
     df = df.sort_values(["event_date", "kind"]).reset_index(drop=True)
+    return "ok", df, None
 
-    stats.splits = int((df["kind"] == "split").sum())
-    stats.dividends = int((df["kind"] == "dividend").sum())
-    return stats, df
+
+def _fetch_one(
+    symbol: str, *, sleep_s: float = 0.0, limiter: "_RateLimiter | None" = None,
+) -> tuple[ActionsStats, pd.DataFrame | None]:
+    """Pull splits + dividends for one NSE symbol via yfinance.
+
+    Tries each Yahoo candidate (`_candidates`: NSE listing, then BSE, or an
+    explicit remap) until one yields a definitive answer, so a symbol whose
+    `.NS` feed is broken is recovered from `.BO` or its remapped ticker. A
+    definitive answer ('ok' / 'no_actions') stops the search; only an empty
+    history or transient error falls through to the next candidate.
+    """
+    stats = ActionsStats(symbol=symbol)
+    saw_empty_history = False
+    last_err = None
+    for ytk in _candidates(symbol):
+        kind, df, err = _fetch_candidate(ytk, symbol, limiter)
+        if sleep_s:
+            time.sleep(sleep_s)
+        if kind == "ok":
+            stats.status = "ok"
+            stats.matched = ytk
+            stats.splits = int((df["kind"] == "split").sum())
+            stats.dividends = int((df["kind"] == "dividend").sum())
+            return stats, df
+        if kind == "no_actions":
+            stats.status = "no_actions"
+            stats.matched = ytk
+            return stats, None
+        if kind == "empty_history":
+            saw_empty_history = True
+        else:  # error
+            last_err = err
+
+    # No candidate had usable data. Prefer 'no_data' (a clean empty history is
+    # more informative than a transient error) unless every attempt errored.
+    if saw_empty_history or last_err is None:
+        stats.status = "no_data"
+    else:
+        stats.status = "error"
+        stats.error = last_err
+    return stats, None
 
 
 def _has_actions_data(symbol: str) -> bool:
