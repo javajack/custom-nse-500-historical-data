@@ -243,6 +243,7 @@ def action_actions() -> None:
     state_mod.mark_actions_refreshed()
     console.print(
         f"[green]total={r.total}  ok={r.ok}  no_data={r.no_data}  errors={r.errors}  "
+        f"recovered={r.recovered}  skipped_parked={r.skipped_parked}  "
         f"splits={r.splits}  dividends={r.dividends}[/green]"
     )
     if r.gaps:

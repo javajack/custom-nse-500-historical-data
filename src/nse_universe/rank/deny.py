@@ -23,10 +23,15 @@ in ``universe_v2``.
 """
 from __future__ import annotations
 
-# Suffixes that unambiguously denote NSE ETF families. Real equities ending
-# in BEES/ETF/IETF do not exist on NSE as of 2026-05 — these brand suffixes
-# are reserved by AMCs for their fund families.
-_NON_EQUITY_SUFFIXES: tuple[str, ...] = ("BEES", "ETF", "IETF")
+# Suffixes that unambiguously denote NSE ETF / fund families. No NSE equity
+# ends in any of these across 13 years of bhavcopy history — the suffixes are
+# reserved by AMCs for their fund products:
+#   BEES/ETF/IETF  — exchange-traded funds
+#   ADD            — ETF "additional units" creation tickers (GOLDADD, NIFTYADD…)
+#   CASE           — basket / smallcase-style fund products (GOLDCASE, LTGILTCASE…)
+# Verified: SELECT DISTINCT symbol … WHERE symbol LIKE '%ADD'/'%CASE' returns
+# only fund tickers, never a real company.
+_NON_EQUITY_SUFFIXES: tuple[str, ...] = ("BEES", "ETF", "IETF", "ADD", "CASE")
 
 # Brand-named gold, silver, liquid, and index funds where the symbol does
 # not end in one of the suffixes above. Curated from 13 years of universe_v2

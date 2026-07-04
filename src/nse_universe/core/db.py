@@ -21,7 +21,7 @@ import duckdb
 
 from nse_universe.paths import DB_PATH, PARQUET_DIR, ensure_dirs
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _INTERNAL_DDL: tuple[str, ...] = (
     """
@@ -119,6 +119,20 @@ _INTERNAL_DDL: tuple[str, ...] = (
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_surv_date ON surveillance_daily(date)
+    """,
+    # yfinance coverage cache: parks symbols that repeatedly return no data
+    # (ETFs missed by the deny-list, delisted / renamed tickers) so the
+    # corporate-actions job stops re-fetching them every run. Symbols are
+    # re-probed once `last_checked` ages past the reprobe window.
+    """
+    CREATE TABLE IF NOT EXISTS yf_coverage (
+        symbol              VARCHAR PRIMARY KEY,
+        status              VARCHAR NOT NULL,          -- 'ok' | 'no_data'
+        consecutive_no_data INTEGER NOT NULL DEFAULT 0,
+        parked              BOOLEAN NOT NULL DEFAULT FALSE,
+        last_checked        DATE,
+        last_ok             DATE
+    )
     """,
 )
 

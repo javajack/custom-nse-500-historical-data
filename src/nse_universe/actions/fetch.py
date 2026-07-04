@@ -28,8 +28,22 @@ import yfinance as yf
 from nse_universe.core.db import db
 from nse_universe.core.export import export_all
 from nse_universe.paths import ACTIONS_DIR, ensure_dirs
+from nse_universe.rank.deny import is_non_equity
 
 log = logging.getLogger(__name__)
+
+# yfinance logs every delisted / rate-limited symbol at ERROR on its own
+# logger ("$FOO.NS: possibly delisted; no timezone found"). We already track
+# every failure per-symbol via RefreshResult.gaps + the yf_coverage cache, so
+# silence its noise — a 2000-symbol refresh otherwise floods the console.
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
+# Persistent-cache tuning. A symbol that returns no usable yfinance data for
+# PARK_THRESHOLD consecutive refreshes is "parked" and skipped, then re-probed
+# once its last check ages past REPROBE_DAYS (so a re-listed / renamed ticker
+# can rejoin automatically).
+PARK_THRESHOLD = 2
+REPROBE_DAYS = 30
 
 
 @dataclass
@@ -49,25 +63,127 @@ class RefreshResult:
     errors: int = 0
     splits: int = 0
     dividends: int = 0
+    recovered: int = 0          # failures rescued by the gentle retry pass
+    skipped_parked: int = 0     # symbols skipped via the yf_coverage cache
     gaps: list[str] = field(default_factory=list)
 
 
+def _parked_skip_set(con, today: date, reprobe_days: int) -> set[str]:
+    """Symbols parked in yf_coverage that are NOT yet due for a re-probe.
+
+    A parked symbol is skipped until `last_checked` ages past `reprobe_days`;
+    once stale it drops out of this set and re-enters the fetch universe, so a
+    re-listed / renamed ticker can recover on its own.
+    """
+    reprobe_cutoff = today - timedelta(days=reprobe_days)
+    rows = con.execute(
+        "SELECT symbol FROM yf_coverage WHERE parked = TRUE AND last_checked > ?",
+        [reprobe_cutoff],
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
+def _active_equity_from_con(
+    con,
+    *,
+    today: date,
+    lookback_days: int = 365,
+    min_days_seen: int = 20,
+) -> list[str]:
+    """Recently-active NSE symbols, minus non-equity (ETF / fund) instruments.
+
+    "Recently active" = traded on at least `min_days_seen` days within the last
+    `lookback_days`. The deny-list drops ETFs and gold / silver / liquid / index
+    funds, which NSE files under the same EQ series as real equities.
+    """
+    cutoff = today - timedelta(days=lookback_days)
+    rows = con.execute(
+        """
+        SELECT symbol
+        FROM bhav_daily
+        WHERE date >= ?
+        GROUP BY symbol
+        HAVING COUNT(*) >= ?
+        ORDER BY symbol
+        """,
+        [cutoff, min_days_seen],
+    ).fetchall()
+    return [r[0] for r in rows if not is_non_equity(r[0])]
+
+
+def _list_symbols_from_con(
+    con,
+    *,
+    today: date,
+    lookback_days: int = 365,
+    min_days_seen: int = 20,
+    reprobe_days: int = REPROBE_DAYS,
+) -> list[str]:
+    """Active NSE equities to fetch actions for, minus symbols parked in the
+    yf_coverage cache that are not yet due for a re-probe."""
+    active = _active_equity_from_con(
+        con, today=today, lookback_days=lookback_days, min_days_seen=min_days_seen
+    )
+    parked = _parked_skip_set(con, today, reprobe_days)
+    return [s for s in active if s not in parked]
+
+
 def _list_symbols(lookback_days: int = 365, min_days_seen: int = 20) -> list[str]:
-    """Return symbols we should fetch actions for — recently active NSE EQ."""
-    cutoff = date.today() - timedelta(days=lookback_days)
+    """Convenience wrapper: open a read-only connection and list the universe."""
     with db(read_only=True) as con:
-        rows = con.execute(
-            """
-            SELECT symbol
-            FROM bhav_daily
-            WHERE date >= ?
-            GROUP BY symbol
-            HAVING COUNT(*) >= ?
-            ORDER BY symbol
-            """,
-            [cutoff, min_days_seen],
+        return _list_symbols_from_con(
+            con, today=date.today(),
+            lookback_days=lookback_days, min_days_seen=min_days_seen,
+        )
+
+
+def _update_coverage(
+    con,
+    outcomes: dict[str, str],
+    today: date,
+    *,
+    park_threshold: int = PARK_THRESHOLD,
+) -> None:
+    """Record each attempted symbol's outcome in the yf_coverage cache.
+
+    'ok' resets the streak and un-parks; anything else ('no_data' / 'error')
+    increments the consecutive-miss counter and parks at `park_threshold`.
+    """
+    if not outcomes:
+        return
+    prior = {
+        r[0]: (r[1], r[2])
+        for r in con.execute(
+            "SELECT symbol, consecutive_no_data, last_ok FROM yf_coverage"
         ).fetchall()
-    return [r[0] for r in rows]
+    }
+    rows = []
+    for sym, status in outcomes.items():
+        prev_streak, prev_last_ok = prior.get(sym, (0, None))
+        if status == "ok":
+            rows.append((sym, "ok", 0, False, today, today))
+        else:
+            streak = prev_streak + 1
+            rows.append((sym, "no_data", streak, streak >= park_threshold,
+                         today, prev_last_ok))
+    staging = pd.DataFrame(
+        rows,
+        columns=["symbol", "status", "consecutive_no_data",
+                 "parked", "last_checked", "last_ok"],
+    )
+    con.register("_cov_staging", staging)
+    con.execute(
+        "DELETE FROM yf_coverage WHERE symbol IN (SELECT symbol FROM _cov_staging)"
+    )
+    con.execute(
+        """
+        INSERT INTO yf_coverage
+            (symbol, status, consecutive_no_data, parked, last_checked, last_ok)
+        SELECT symbol, status, consecutive_no_data, parked, last_checked, last_ok
+        FROM _cov_staging
+        """
+    )
+    con.unregister("_cov_staging")
 
 
 def _fetch_one(symbol: str, *, sleep_s: float = 0.25) -> tuple[ActionsStats, pd.DataFrame | None]:
@@ -76,6 +192,19 @@ def _fetch_one(symbol: str, *, sleep_s: float = 0.25) -> tuple[ActionsStats, pd.
     try:
         tkr = yf.Ticker(f"{symbol}.NS")
         actions = tkr.actions
+    except AttributeError as e:
+        # yfinance 1.3.x raises "'PriceHistory' object has no attribute
+        # '_dividends'" when the underlying price history came back empty —
+        # a Yahoo throttle transient or a genuinely delisted symbol. That's
+        # "no usable data", not an unexpected error: classify as no_data so it
+        # flows through the retry pass and the yf_coverage cache cleanly instead
+        # of polluting the gaps list with a stack-trace string.
+        if "_dividends" in str(e) or "_splits" in str(e):
+            stats.status = "no_data"
+        else:
+            stats.status = "error"
+            stats.error = str(e)[:200]
+        return stats, None
     except Exception as e:
         stats.status = "error"
         stats.error = str(e)[:200]
@@ -147,51 +276,126 @@ def _upsert_events(con, df: pd.DataFrame) -> None:
     con.unregister("_staging_actions")
 
 
+def _consume(
+    fut, sym: str, con, result: RefreshResult,
+    outcomes: dict[str, str], err_msg: dict[str, str],
+) -> str:
+    """Apply one completed future: write data on success, record the outcome.
+
+    Returns the outcome bucket ('ok' | 'no_data' | 'error'). ok / splits /
+    dividends are tallied here (guarded so a retry that flips no_data→ok counts
+    once); no_data / error totals are tallied later from the final outcomes so a
+    recovered symbol isn't double-counted.
+    """
+    try:
+        stats, df = fut.result()
+    except Exception as e:
+        outcomes[sym] = "error"
+        err_msg[sym] = f"exec:{type(e).__name__}"
+        return "error"
+    if stats.status == "ok" and df is not None:
+        _write_symbol_parquet(sym, df)
+        _upsert_events(con, df)
+        if outcomes.get(sym) != "ok":
+            result.ok += 1
+            result.splits += stats.splits
+            result.dividends += stats.dividends
+        outcomes[sym] = "ok"
+        return "ok"
+    if stats.status == "no_data":
+        outcomes[sym] = "no_data"
+        return "no_data"
+    outcomes[sym] = "error"
+    err_msg[sym] = stats.error or "error"
+    return "error"
+
+
 def refresh_actions(
     symbols: list[str] | None = None,
     *,
     max_workers: int = 4,
     progress_cb=None,
+    retry_failed: bool = True,
+    today: date | None = None,
+    park_threshold: int = PARK_THRESHOLD,
+    reprobe_days: int = REPROBE_DAYS,
 ) -> RefreshResult:
-    """Pull yfinance actions for `symbols` (default: recently active universe).
+    """Pull yfinance actions for `symbols` (default: recently active equities).
+
+    Pipeline per run:
+      1. Universe = active NSE equities, minus ETFs/funds (deny-list) and
+         symbols parked in the yf_coverage cache (unless due for reprobe).
+      2. Main threaded pass fetches splits + dividends per symbol.
+      3. Gentle retry pass (half the workers, longer sleep) re-attempts every
+         failure once — recovers live stocks that merely hit a Yahoo rate-limit
+         ("no timezone found") rather than being genuinely delisted.
+      4. Outcomes persist to yf_coverage so repeat no-data symbols self-park.
 
     Writes per-symbol parquet + upserts into adj_events. Degrades gracefully
     per-symbol: Yahoo 404 / timeout → `gaps` list.
     """
     ensure_dirs()
-    syms = symbols if symbols is not None else _list_symbols()
-    result = RefreshResult(total=len(syms))
-    if not syms:
-        return result
+    today = today or date.today()
 
-    with db() as con, ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_fetch_one, s): s for s in syms}
-        done = 0
-        for fut in as_completed(futures):
-            sym = futures[fut]
-            done += 1
-            try:
-                stats, df = fut.result()
-            except Exception as e:
-                result.errors += 1
-                result.gaps.append(f"{sym}:exec:{type(e).__name__}")
+    with db() as con:
+        if symbols is not None:
+            syms = symbols
+            skipped_parked = 0
+        else:
+            active = _active_equity_from_con(con, today=today)
+            parked = _parked_skip_set(con, today, reprobe_days)
+            syms = [s for s in active if s not in parked]
+            skipped_parked = len(active) - len(syms)
+
+        result = RefreshResult(total=len(syms), skipped_parked=skipped_parked)
+        if not syms:
+            return result
+
+        outcomes: dict[str, str] = {}
+        err_msg: dict[str, str] = {}
+
+        # --- main pass (threaded) ---
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_fetch_one, s): s for s in syms}
+            done = 0
+            for fut in as_completed(futures):
+                sym = futures[fut]
+                done += 1
+                status = _consume(fut, sym, con, result, outcomes, err_msg)
                 if progress_cb:
-                    progress_cb(done, len(syms), sym, "error")
+                    progress_cb(done, len(syms), sym, status)
+
+        # --- retry pass (gentle) — rescue transient rate-limit failures ---
+        failed = [s for s in syms if outcomes.get(s) != "ok"]
+        if retry_failed and failed:
+            retry_workers = max(1, max_workers // 2)
+            with ThreadPoolExecutor(max_workers=retry_workers) as pool:
+                futures = {pool.submit(_fetch_one, s, sleep_s=0.75): s for s in failed}
+                done = 0
+                for fut in as_completed(futures):
+                    sym = futures[fut]
+                    done += 1
+                    status = _consume(fut, sym, con, result, outcomes, err_msg)
+                    if status == "ok":
+                        result.recovered += 1
+                    if progress_cb:
+                        progress_cb(done, len(failed), sym, f"retry:{status}")
+
+        # --- tally no_data / errors / gaps from FINAL outcomes ---
+        for sym in syms:
+            status = outcomes.get(sym, "no_data")
+            if status == "ok":
                 continue
-            if stats.status == "ok" and df is not None:
-                _write_symbol_parquet(sym, df)
-                _upsert_events(con, df)
-                result.ok += 1
-                result.splits += stats.splits
-                result.dividends += stats.dividends
-            elif stats.status == "no_data":
+            if status == "error":
+                result.errors += 1
+                result.gaps.append(f"{sym}:{err_msg.get(sym, 'error')}")
+            else:
                 result.no_data += 1
                 result.gaps.append(f"{sym}:no_data")
-            else:
-                result.errors += 1
-                result.gaps.append(f"{sym}:{stats.error or 'error'}")
-            if progress_cb:
-                progress_cb(done, len(syms), sym, stats.status)
+
+        # --- persist coverage so repeat-failures self-park next run ---
+        _update_coverage(con, outcomes, today, park_threshold=park_threshold)
+
     try:
         export_all()
     except Exception as e:
