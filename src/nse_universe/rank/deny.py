@@ -50,8 +50,9 @@ _NON_EQUITY_EXPLICIT: frozenset[str] = frozenset({
     "HDFCSILVER", "MASILVER", "MOSILVER", "NETFSILVER",
     "SBISILVER", "SILVER", "SILVER1", "SILVERADD",
     "SILVERCASE", "TATSILV",
-    # Index funds with brand-specific names
+    # Index funds / index ETFs with brand-specific names (no ETF/BEES suffix)
     "HDFCSML250", "MON100", "N100", "SETFNIF50",
+    "NIFMID150", "UTINEXT50", "UTISXN50",
 })
 
 

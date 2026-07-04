@@ -23,6 +23,14 @@ def test_candidates_uses_explicit_remap():
     assert _candidates("TATAMOTORS")[0] == "TMPV.NS"
 
 
+@pytest.mark.parametrize("nse,ytk", [
+    ("TATAMOTORS", "TMPV.NS"), ("LTIM", "LTM.NS"), ("PEL", "PIRAMALFIN.NS"),
+    ("SWANENERGY", "SWANCORP.NS"), ("AKZOINDIA", "JSWDULUX.NS"),
+])
+def test_verified_remaps_registered(nse, ytk):
+    assert _candidates(nse)[0] == ytk
+
+
 def _actions_df():
     idx = pd.to_datetime(["2020-01-01", "2021-06-01"])
     idx.name = "Date"

@@ -69,8 +69,16 @@ YF_TIMEOUT = 30
 #   (all dividends + splits, back to listing) onto the Passenger Vehicles
 #   ticker TMPV; TATAMOTORS.NS/.BO now return empty. Verified 2026-07: TMPV.NS
 #   → 8962 rows, 25 dividends, 2 splits.
+#   LTIM  → LTM        (renamed LTIMindtree → LTM Limited)
+#   PEL   → PIRAMALFIN (Piramal Enterprises → Piramal Finance merger; PEL suspended)
+#   SWANENERGY → SWANCORP (renamed Swan Energy → Swan Corp)
+#   AKZOINDIA  → JSWDULUX  (Akzo Nobel India → JSW Dulux)
 SYMBOL_REMAP: dict[str, list[str]] = {
     "TATAMOTORS": ["TMPV.NS", "TMPV.BO"],
+    "LTIM":       ["LTM.NS", "LTM.BO"],
+    "PEL":        ["PIRAMALFIN.NS", "PIRAMALFIN.BO"],
+    "SWANENERGY": ["SWANCORP.NS", "SWANCORP.BO"],
+    "AKZOINDIA":  ["JSWDULUX.NS", "JSWDULUX.BO"],
 }
 
 
