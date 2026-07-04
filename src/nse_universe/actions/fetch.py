@@ -59,26 +59,48 @@ FRESH_DAYS = 7
 YF_RETRIES = 3
 YF_TIMEOUT = 30
 
-# Yahoo symbol remap for NSE tickers whose Yahoo listing moved (demergers,
-# renames) so `{SYMBOL}.NS` returns empty history. Each entry is the ordered
-# list of Yahoo tickers to try *instead of* the default; the recovered actions
-# are still stored under the NSE symbol. Every remap must be verified (the
-# candidate returns the pre-event history + actions) before being added here.
+# Yahoo symbol remap for NSE tickers whose Yahoo listing moved (renames,
+# demergers, mergers) so `{SYMBOL}.NS` returns empty history. Each entry is the
+# ordered list of Yahoo tickers to try *instead of* the default; recovered
+# actions are still stored under the original NSE symbol. Every remap here was
+# verified to return the security's history + actions.
 #
-#   TATAMOTORS — 2025 demerger. Yahoo migrated the full Tata Motors history
-#   (all dividends + splits, back to listing) onto the Passenger Vehicles
-#   ticker TMPV; TATAMOTORS.NS/.BO now return empty. Verified 2026-07: TMPV.NS
-#   → 8962 rows, 25 dividends, 2 splits.
-#   LTIM  → LTM        (renamed LTIMindtree → LTM Limited)
-#   PEL   → PIRAMALFIN (Piramal Enterprises → Piramal Finance merger; PEL suspended)
-#   SWANENERGY → SWANCORP (renamed Swan Energy → Swan Corp)
-#   AKZOINDIA  → JSWDULUX  (Akzo Nobel India → JSW Dulux)
+# NOTE on mergers/amalgamations (ACLGATI, DHANI, MANGCHEFER, UDAICEMENT, PEL):
+# the old symbol was absorbed into a successor, so the remap target is the
+# *successor's* ticker. Its actions are the best available proxy for adjusting
+# the old symbol's pre-suspension price series — accurate for pure renames,
+# approximate where the successor's split/dividend history diverges.
 SYMBOL_REMAP: dict[str, list[str]] = {
-    "TATAMOTORS": ["TMPV.NS", "TMPV.BO"],
-    "LTIM":       ["LTM.NS", "LTM.BO"],
-    "PEL":        ["PIRAMALFIN.NS", "PIRAMALFIN.BO"],
-    "SWANENERGY": ["SWANCORP.NS", "SWANCORP.BO"],
-    "AKZOINDIA":  ["JSWDULUX.NS", "JSWDULUX.BO"],
+    # demergers / renames verified earlier
+    "TATAMOTORS": ["TMPV.NS", "TMPV.BO"],          # 2025 demerger → Passenger Vehicles
+    "LTIM":       ["LTM.NS", "LTM.BO"],            # LTIMindtree → LTM Limited
+    "PEL":        ["PIRAMALFIN.NS", "PIRAMALFIN.BO"],  # Piramal Enterprises→Finance merger
+    "SWANENERGY": ["SWANCORP.NS", "SWANCORP.BO"],  # Swan Energy → Swan Corp
+    "AKZOINDIA":  ["JSWDULUX.NS", "JSWDULUX.BO"],  # Akzo Nobel India → JSW Dulux
+    # renames / mergers (user-verified Yahoo tickers)
+    "ACLGATI":    ["ALLCARGO.NS", "ALLCARGO.BO"],  # amalgamated into Allcargo Logistics
+    "ARISINFRA":  ["ARISINFRA.BO"],                # 2025 IPO; Yahoo .NS not live
+    "BARBEQUE":   ["UFBL.NS", "UFBL.BO"],          # → United Foodbrands
+    "DHANI":      ["IBULLSLTD.NS", "IBULLSLTD.BO"],  # → Indiabulls Limited
+    "EXCEL":      ["LANDSMILL.NS", "LANDSMILL.BO"],  # Excel Realty → Landsmill Green
+    "GANESHHOUC": ["GANESHHOU.NS", "GANESHHOU.BO"],  # → Ganesh Housing Limited
+    "GEPIL":      ["GVPIL.NS", "GVPIL.BO"],        # GE Power India symbol change
+    "HEUBACHIND": ["SUDARCOLOR.NS", "SUDARCOLOR.BO"],  # → Sudarshan Colorants India
+    "INDSWFTLTD": ["INDSWFTLTD-BE.NS", "524652.BO"],   # Yahoo NSE quote under -BE series
+    "INFIBEAM":   ["CCAVENUE.NS", "CCAVENUE.BO"],  # Infibeam Avenues → AvenuesAI
+    "ITDCEM":     ["CEMPRO.NS", "CEMPRO.BO"],      # ITD Cementation → Cemindia Projects
+    "JCHAC":      ["BOSCH-HCIL.NS", "BOSCH-HCIL.BO", "523398.BO"],  # → Bosch Home Comfort
+    "MANGCHEFER": ["PARADEEP.NS", "PARADEEP.BO"],  # merged into Paradeep Phosphates
+    "MEGASOFT":   ["SIGMAADV.NS", "SIGMAADV.BO", "MEGASOFT.BO"],  # → Sigma Advanced Systems
+    "SABTNL":     ["AQYLON.NS", "AQYLON.BO"],      # → Aqylon Nexus
+    "SASTASUNDR": ["HEALTHX.NS", "SASTASUNDR.BO"],  # → Health X Platform (BSE lags)
+    "SELAN":      ["ANTELOPUS.NS", "ANTELOPUS.BO"],  # → Antelopus Selan Energy
+    "SEQUENT":    ["VIYASH.NS", "VIYASH.BO"],      # Sequent Scientific → Viyash Scientific
+    "SGLTL":      ["SETL.NS", "SETL.BO"],          # Standard Glass Lining → Standard Engg Tech
+    "SMLISUZU":   ["SMLMAH.NS", "SMLMAH.BO"],      # SML Isuzu → SML Mahindra
+    "SMSLIFE":    ["HALEOSLABS.NS", "HALEOSLABS.BO"],  # SMS Lifesciences → Haleos Labs
+    "SUNDARMHLD": ["TSFINV.NS"],                   # Sundaram Fin Holdings → TSF Investments
+    "UDAICEMENT": ["JKLAKSHMI.NS", "JKLAKSHMI.BO"],  # merged into JK Lakshmi Cement
 }
 
 

@@ -26,9 +26,18 @@ def test_candidates_uses_explicit_remap():
 @pytest.mark.parametrize("nse,ytk", [
     ("TATAMOTORS", "TMPV.NS"), ("LTIM", "LTM.NS"), ("PEL", "PIRAMALFIN.NS"),
     ("SWANENERGY", "SWANCORP.NS"), ("AKZOINDIA", "JSWDULUX.NS"),
+    ("ITDCEM", "CEMPRO.NS"), ("SEQUENT", "VIYASH.NS"), ("SMLISUZU", "SMLMAH.NS"),
+    ("SUNDARMHLD", "TSFINV.NS"), ("UDAICEMENT", "JKLAKSHMI.NS"),
+    ("ARISINFRA", "ARISINFRA.BO"),   # .BO-only: Yahoo .NS not live
 ])
 def test_verified_remaps_registered(nse, ytk):
     assert _candidates(nse)[0] == ytk
+
+
+def test_remap_bse_fallback_appended():
+    # non-.BO-only entries keep a BSE fallback after the primary .NS ticker
+    assert _candidates("ITDCEM") == ["CEMPRO.NS", "CEMPRO.BO"]
+    assert _candidates("SUNDARMHLD") == ["TSFINV.NS"]   # no verified .BO
 
 
 def _actions_df():
@@ -71,14 +80,15 @@ def _no_sleep(monkeypatch):
 
 
 def test_falls_back_to_bo_when_ns_empty(monkeypatch):
-    fake = _FakeYF({"INFIBEAM.NS": "empty_history", "INFIBEAM.BO": _actions_df()})
+    # GENERICEQ is not in SYMBOL_REMAP → default [.NS, .BO] candidates
+    fake = _FakeYF({"GENERICEQ.NS": "empty_history", "GENERICEQ.BO": _actions_df()})
     monkeypatch.setattr(fetch, "yf", fake)
-    stats, df = _fetch_one("INFIBEAM")
+    stats, df = _fetch_one("GENERICEQ")
     assert stats.status == "ok"
-    assert stats.matched == "INFIBEAM.BO"
+    assert stats.matched == "GENERICEQ.BO"
     assert stats.splits == 1 and stats.dividends == 1
-    assert list(df["symbol"].unique()) == ["INFIBEAM"]   # stored under NSE symbol
-    assert fake.calls == ["INFIBEAM.NS", "INFIBEAM.BO"]
+    assert list(df["symbol"].unique()) == ["GENERICEQ"]   # stored under NSE symbol
+    assert fake.calls == ["GENERICEQ.NS", "GENERICEQ.BO"]
 
 
 def test_first_candidate_ok_skips_fallback(monkeypatch):
