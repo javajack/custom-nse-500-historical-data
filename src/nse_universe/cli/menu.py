@@ -242,8 +242,9 @@ def action_actions() -> None:
         r = refresh_actions(symbols=symbols, progress_cb=cb)
     state_mod.mark_actions_refreshed()
     console.print(
-        f"[green]total={r.total}  ok={r.ok}  no_data={r.no_data}  errors={r.errors}  "
-        f"recovered={r.recovered}  skipped_parked={r.skipped_parked}  "
+        f"[green]total={r.total}  ok={r.ok}  no_actions={r.no_actions}  "
+        f"no_data={r.no_data}  errors={r.errors}  recovered={r.recovered}  "
+        f"skipped_parked={r.skipped_parked}  skipped_fresh={r.skipped_fresh}  "
         f"splits={r.splits}  dividends={r.dividends}[/green]"
     )
     if r.gaps:

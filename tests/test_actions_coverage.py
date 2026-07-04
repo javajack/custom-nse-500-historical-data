@@ -35,6 +35,36 @@ def test_fetch_one_empty_history_classified_no_data(monkeypatch):
     assert df is None
 
 
+def test_fetch_one_empty_frame_is_no_actions(monkeypatch):
+    """History exists but no dividends/splits → empty frame → 'no_actions',
+    distinct from the empty-history AttributeError ('no_data')."""
+    import pandas as pd
+
+    class _NoActionsTicker:
+        def __init__(self, *a, **k):
+            pass
+        @property
+        def actions(self):
+            return pd.DataFrame()
+
+    monkeypatch.setattr(fetch.yf, "Ticker", _NoActionsTicker)
+    monkeypatch.setattr(fetch.time, "sleep", lambda *a, **k: None)
+    stats, df = fetch._fetch_one("ADANIGREEN", sleep_s=0)
+    assert stats.status == "no_actions"
+    assert df is None
+
+
+def test_update_coverage_no_actions_is_answered(monkeypatch):
+    """no_actions is a definitive answer: stamps last_ok, resets, never parks."""
+    monkeypatch.setattr(fetch, "_has_actions_data", lambda s: False)
+    con = _fresh_con()
+    _update_coverage(con, {"NODIV": "no_actions"}, TODAY, park_threshold=1)
+    row = con.execute(
+        "SELECT status, consecutive_no_data, parked, last_ok FROM yf_coverage WHERE symbol='NODIV'"
+    ).fetchone()
+    assert row == ("no_actions", 0, False, TODAY)
+
+
 def test_fetch_one_genuine_error_stays_error(monkeypatch):
     class _BoomTicker:
         def __init__(self, *a, **k):

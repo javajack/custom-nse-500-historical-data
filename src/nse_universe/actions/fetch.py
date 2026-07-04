@@ -14,6 +14,7 @@ Concurrency: threaded with a small pool. Yahoo tolerates this well in practice.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -45,6 +46,43 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 PARK_THRESHOLD = 2
 REPROBE_DAYS = 30
 
+# Throttle control. yfinance 1.3.0 mandates a curl_cffi session (requests_cache
+# is rejected) and ships no rate limiter, so we pace requests ourselves:
+#   * DEFAULT_RATE_PER_SEC — global cap on yfinance calls/sec across all workers.
+#   * FRESH_DAYS — skip re-fetching a symbol whose actions succeeded within this
+#     window (corporate actions are infrequent; this is the achievable stand-in
+#     for the HTTP cache curl_cffi can't provide, and it makes repeat runs fast).
+#   * YF_RETRIES / YF_TIMEOUT — yfinance's own transient-error retry + per-request
+#     timeout (both default to off in 1.3.0).
+DEFAULT_RATE_PER_SEC = 3.0
+FRESH_DAYS = 7
+YF_RETRIES = 3
+YF_TIMEOUT = 30
+
+
+class _RateLimiter:
+    """Thread-safe minimum-interval limiter: at most `rate_per_sec` acquisitions
+    per second, globally, across all worker threads. Spacing (not bursting) is
+    what keeps us under Yahoo's undocumented throttle. `clock`/`sleep` are
+    injectable for deterministic testing."""
+
+    def __init__(self, rate_per_sec: float, *, clock=time.monotonic, sleep=time.sleep):
+        self._min_interval = 1.0 / rate_per_sec if rate_per_sec and rate_per_sec > 0 else 0.0
+        self._clock = clock
+        self._sleep = sleep
+        self._lock = threading.Lock()
+        self._next = 0.0
+
+    def acquire(self) -> None:
+        if self._min_interval <= 0:
+            return
+        with self._lock:
+            now = self._clock()
+            if now < self._next:
+                self._sleep(self._next - now)
+                now = self._next
+            self._next = now + self._min_interval
+
 
 @dataclass
 class ActionsStats:
@@ -59,12 +97,14 @@ class ActionsStats:
 class RefreshResult:
     total: int = 0
     ok: int = 0
-    no_data: int = 0
+    no_actions: int = 0         # has history but no dividends/splits (covered)
+    no_data: int = 0            # empty history: throttle / gap / delisted
     errors: int = 0
     splits: int = 0
     dividends: int = 0
     recovered: int = 0          # failures rescued by the gentle retry pass
     skipped_parked: int = 0     # symbols skipped via the yf_coverage cache
+    skipped_fresh: int = 0      # symbols skipped as recently-fetched (freshness cache)
     gaps: list[str] = field(default_factory=list)
 
 
@@ -79,6 +119,24 @@ def _parked_skip_set(con, today: date, reprobe_days: int) -> set[str]:
     rows = con.execute(
         "SELECT symbol FROM yf_coverage WHERE parked = TRUE AND last_checked > ?",
         [reprobe_cutoff],
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
+def _fresh_skip_set(con, today: date, fresh_days: int) -> set[str]:
+    """Symbols whose actions were fetched successfully within `fresh_days`.
+
+    Corporate actions change rarely, so re-fetching a symbol whose data is only
+    days old just burns request budget against Yahoo's throttle. Skipping them
+    is our stand-in for the HTTP cache curl_cffi can't provide. `fresh_days <= 0`
+    disables the freshness cache (always re-fetch).
+    """
+    if fresh_days <= 0:
+        return set()
+    cutoff = today - timedelta(days=fresh_days)
+    rows = con.execute(
+        "SELECT symbol FROM yf_coverage WHERE last_ok IS NOT NULL AND last_ok >= ?",
+        [cutoff],
     ).fetchall()
     return {r[0] for r in rows}
 
@@ -146,10 +204,12 @@ def _update_coverage(
 ) -> None:
     """Record each attempted symbol's outcome in the yf_coverage cache.
 
-    'ok' resets the streak and un-parks; anything else ('no_data' / 'error')
-    increments the consecutive-miss counter and parks at `park_threshold` —
-    but only for symbols without proven coverage (see the parking guard below),
-    so throttled misses never park a live stock.
+    A definitive answer — 'ok' (has actions) or 'no_actions' (has history, no
+    dividends/splits) — resets the streak, un-parks, and stamps last_ok so the
+    freshness cache can skip the symbol. A real miss ('no_data' / 'error')
+    increments the consecutive-miss counter and parks at `park_threshold`, but
+    only for symbols without proven coverage (see the parking guard below), so
+    throttled misses never park a live stock.
     """
     if not outcomes:
         return
@@ -159,11 +219,12 @@ def _update_coverage(
             "SELECT symbol, consecutive_no_data, last_ok FROM yf_coverage"
         ).fetchall()
     }
+    answered = {"ok", "no_actions"}
     rows = []
     for sym, status in outcomes.items():
         prev_streak, prev_last_ok = prior.get(sym, (0, None))
-        if status == "ok":
-            rows.append((sym, "ok", 0, False, today, today))
+        if status in answered:
+            rows.append((sym, status, 0, False, today, today))
         else:
             streak = prev_streak + 1
             # Only park symbols with NO proven coverage. A symbol that has ever
@@ -196,9 +257,18 @@ def _update_coverage(
     con.unregister("_cov_staging")
 
 
-def _fetch_one(symbol: str, *, sleep_s: float = 0.25) -> tuple[ActionsStats, pd.DataFrame | None]:
-    """Pull splits + dividends for one NSE symbol via yfinance."""
+def _fetch_one(
+    symbol: str, *, sleep_s: float = 0.0, limiter: "_RateLimiter | None" = None,
+) -> tuple[ActionsStats, pd.DataFrame | None]:
+    """Pull splits + dividends for one NSE symbol via yfinance.
+
+    `limiter`, when supplied, paces the yfinance call to stay under Yahoo's
+    throttle (shared across all worker threads). `sleep_s` is a legacy per-call
+    delay, now 0 by default since the limiter handles pacing.
+    """
     stats = ActionsStats(symbol=symbol)
+    if limiter is not None:
+        limiter.acquire()
     try:
         tkr = yf.Ticker(f"{symbol}.NS")
         actions = tkr.actions
@@ -210,6 +280,7 @@ def _fetch_one(symbol: str, *, sleep_s: float = 0.25) -> tuple[ActionsStats, pd.
         # flows through the retry pass and the yf_coverage cache cleanly instead
         # of polluting the gaps list with a stack-trace string.
         if "_dividends" in str(e) or "_splits" in str(e):
+            # empty price history → real miss (throttle / gap / delisted)
             stats.status = "no_data"
         else:
             stats.status = "error"
@@ -220,10 +291,15 @@ def _fetch_one(symbol: str, *, sleep_s: float = 0.25) -> tuple[ActionsStats, pd.
         stats.error = str(e)[:200]
         return stats, None
     finally:
-        time.sleep(sleep_s)
+        if sleep_s:
+            time.sleep(sleep_s)
 
+    # An empty *frame* (not a raise) means history exists but the symbol has no
+    # dividends/splits — a definitive answer, distinct from an empty-history
+    # miss. Mark it 'no_actions' so the freshness cache can skip it and the
+    # retry/park machinery leaves it alone.
     if actions is None or actions.empty:
-        stats.status = "no_data"
+        stats.status = "no_actions"
         return stats, None
 
     # tidy: flatten to (event_date, kind, ratio) rows
@@ -240,7 +316,7 @@ def _fetch_one(symbol: str, *, sleep_s: float = 0.25) -> tuple[ActionsStats, pd.
         frames.append(dv)
 
     if not frames:
-        stats.status = "no_data"
+        stats.status = "no_actions"
         return stats, None
 
     df = pd.concat(frames)
@@ -319,12 +395,25 @@ def _consume(
             result.dividends += stats.dividends
         outcomes[sym] = "ok"
         return "ok"
+    if stats.status == "no_actions":
+        outcomes[sym] = "no_actions"
+        return "no_actions"
     if stats.status == "no_data":
         outcomes[sym] = "no_data"
         return "no_data"
     outcomes[sym] = "error"
     err_msg[sym] = stats.error or "error"
     return "error"
+
+
+def _configure_yfinance() -> None:
+    """Enable yfinance's own transient-error retry + per-request timeout (both
+    default to off in 1.3.0). Idempotent; safe to call every run."""
+    try:
+        yf.config.network.retries = YF_RETRIES
+        yf.config.network.timeout = YF_TIMEOUT
+    except Exception as e:  # pragma: no cover - defensive against API drift
+        log.debug("could not set yfinance network config: %s", e)
 
 
 def refresh_actions(
@@ -336,44 +425,59 @@ def refresh_actions(
     today: date | None = None,
     park_threshold: int = PARK_THRESHOLD,
     reprobe_days: int = REPROBE_DAYS,
+    rate_per_sec: float = DEFAULT_RATE_PER_SEC,
+    fresh_days: int = FRESH_DAYS,
 ) -> RefreshResult:
     """Pull yfinance actions for `symbols` (default: recently active equities).
 
     Pipeline per run:
-      1. Universe = active NSE equities, minus ETFs/funds (deny-list) and
-         symbols parked in the yf_coverage cache (unless due for reprobe).
-      2. Main threaded pass fetches splits + dividends per symbol.
-      3. Gentle retry pass (half the workers, longer sleep) re-attempts every
-         failure once — recovers live stocks that merely hit a Yahoo rate-limit
-         ("no timezone found") rather than being genuinely delisted.
-      4. Outcomes persist to yf_coverage so repeat no-data symbols self-park.
+      1. Universe = active NSE equities, minus ETFs/funds (deny-list), symbols
+         parked in yf_coverage (unless due for reprobe), and symbols fetched
+         successfully within `fresh_days` (freshness cache).
+      2. Main threaded pass fetches splits + dividends per symbol, paced by a
+         global `rate_per_sec` limiter to stay under Yahoo's throttle.
+      3. Gentle retry pass (half the workers) re-attempts every failure once —
+         recovers live stocks that merely hit a transient rate-limit.
+      4. Outcomes persist to yf_coverage so repeat no-data symbols self-park and
+         successful fetches feed the freshness cache.
 
     Writes per-symbol parquet + upserts into adj_events. Degrades gracefully
-    per-symbol: Yahoo 404 / timeout → `gaps` list.
+    per-symbol: Yahoo 404 / timeout → `gaps` list. Passing an explicit `symbols`
+    list bypasses all skip filters (parked + freshness) — you asked for them.
     """
     ensure_dirs()
     today = today or date.today()
+    _configure_yfinance()
+    limiter = _RateLimiter(rate_per_sec)
 
     with db() as con:
         if symbols is not None:
             syms = symbols
-            skipped_parked = 0
+            skipped_parked = skipped_fresh = 0
         else:
             active = _active_equity_from_con(con, today=today)
-            parked = _parked_skip_set(con, today, reprobe_days)
-            syms = [s for s in active if s not in parked]
-            skipped_parked = len(active) - len(syms)
+            active_set = set(active)
+            fresh = _fresh_skip_set(con, today, fresh_days) & active_set
+            parked = _parked_skip_set(con, today, reprobe_days) & active_set
+            skip = fresh | parked
+            syms = [s for s in active if s not in skip]
+            skipped_fresh = len(fresh)
+            skipped_parked = len(parked - fresh)
 
-        result = RefreshResult(total=len(syms), skipped_parked=skipped_parked)
+        result = RefreshResult(
+            total=len(syms),
+            skipped_parked=skipped_parked,
+            skipped_fresh=skipped_fresh,
+        )
         if not syms:
             return result
 
         outcomes: dict[str, str] = {}
         err_msg: dict[str, str] = {}
 
-        # --- main pass (threaded) ---
+        # --- main pass (threaded, rate-limited) ---
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {pool.submit(_fetch_one, s): s for s in syms}
+            futures = {pool.submit(_fetch_one, s, limiter=limiter): s for s in syms}
             done = 0
             for fut in as_completed(futures):
                 sym = futures[fut]
@@ -383,11 +487,13 @@ def refresh_actions(
                     progress_cb(done, len(syms), sym, status)
 
         # --- retry pass (gentle) — rescue transient rate-limit failures ---
-        failed = [s for s in syms if outcomes.get(s) != "ok"]
+        # Only real misses ('no_data'/'error') retry; 'ok' and 'no_actions' are
+        # already definitive answers.
+        failed = [s for s in syms if outcomes.get(s) not in ("ok", "no_actions")]
         if retry_failed and failed:
             retry_workers = max(1, max_workers // 2)
             with ThreadPoolExecutor(max_workers=retry_workers) as pool:
-                futures = {pool.submit(_fetch_one, s, sleep_s=0.75): s for s in failed}
+                futures = {pool.submit(_fetch_one, s, limiter=limiter): s for s in failed}
                 done = 0
                 for fut in as_completed(futures):
                     sym = futures[fut]
@@ -398,12 +504,14 @@ def refresh_actions(
                     if progress_cb:
                         progress_cb(done, len(failed), sym, f"retry:{status}")
 
-        # --- tally no_data / errors / gaps from FINAL outcomes ---
+        # --- tally no_actions / no_data / errors / gaps from FINAL outcomes ---
         for sym in syms:
             status = outcomes.get(sym, "no_data")
             if status == "ok":
                 continue
-            if status == "error":
+            if status == "no_actions":
+                result.no_actions += 1
+            elif status == "error":
                 result.errors += 1
                 result.gaps.append(f"{sym}:{err_msg.get(sym, 'error')}")
             else:

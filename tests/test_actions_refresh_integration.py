@@ -58,7 +58,7 @@ class _FakeFetch:
         self.script = {k: list(v) for k, v in script.items()}
         self.calls = defaultdict(int)
 
-    def __call__(self, symbol, *, sleep_s=0.25):
+    def __call__(self, symbol, *, sleep_s=0.0, limiter=None):
         seq = self.script.get(symbol, ["no_data"])
         i = min(self.calls[symbol], len(seq) - 1)
         self.calls[symbol] += 1
@@ -109,7 +109,9 @@ def test_retry_recovers_transient_then_parks_persistent(wired):
         fetch, "_fetch_one",
         _FakeFetch({"LIVE": ["no_data", "ok"], "DEAD": ["no_data"]}),
     )
-    r1 = refresh_actions(today=date(2026, 7, 1))
+    # fresh_days=0 isolates parking from the freshness cache (which would
+    # otherwise skip LIVE on runs 2-3 after its run-1 success)
+    r1 = refresh_actions(today=date(2026, 7, 1), fresh_days=0)
     assert r1.total == 2
     assert r1.ok == 1 and r1.recovered == 1        # LIVE rescued by retry
     assert r1.no_data == 1                          # DEAD still missing
@@ -125,7 +127,7 @@ def test_retry_recovers_transient_then_parks_persistent(wired):
         fetch, "_fetch_one",
         _FakeFetch({"LIVE": ["ok"], "DEAD": ["no_data"]}),
     )
-    r2 = refresh_actions(today=date(2026, 7, 2))
+    r2 = refresh_actions(today=date(2026, 7, 2), fresh_days=0)
     assert r2.skipped_parked == 0                    # not parked at run start
     parked = con.execute("SELECT parked FROM yf_coverage WHERE symbol='DEAD'").fetchone()[0]
     assert parked is True
@@ -133,10 +135,50 @@ def test_retry_recovers_transient_then_parks_persistent(wired):
     # Run 3: DEAD now parked & inside reprobe window → skipped entirely
     fake3 = _FakeFetch({"LIVE": ["ok"], "DEAD": ["ok"]})
     wired.monkeypatch.setattr(fetch, "_fetch_one", fake3)
-    r3 = refresh_actions(today=date(2026, 7, 3))
+    r3 = refresh_actions(today=date(2026, 7, 3), fresh_days=0)
     assert r3.total == 1                             # only LIVE fetched
     assert r3.skipped_parked == 1                    # DEAD skipped via cache
     assert fake3.calls["DEAD"] == 0                  # DEAD never hit yfinance
+
+
+def test_fresh_symbol_skipped_but_explicit_list_bypasses(wired):
+    con = wired.con
+    # LIVE fetched successfully yesterday → inside the 7-day freshness window
+    con.execute(
+        "INSERT INTO yf_coverage VALUES ('LIVE','ok',0,FALSE,?,?)",
+        [date(2026, 7, 4), date(2026, 7, 4)],
+    )
+    fake = _FakeFetch({"LIVE": ["ok"], "DEAD": ["no_data"]})
+    wired.monkeypatch.setattr(fetch, "_fetch_one", fake)
+
+    # default universe: LIVE skipped as fresh, only DEAD fetched
+    r = refresh_actions(today=date(2026, 7, 5), fresh_days=7)
+    assert r.skipped_fresh == 1
+    assert r.total == 1
+    assert fake.calls["LIVE"] == 0
+    assert fake.calls["DEAD"] >= 1
+
+    # explicit symbol list ignores the freshness cache — user asked for it
+    fake2 = _FakeFetch({"LIVE": ["ok"]})
+    wired.monkeypatch.setattr(fetch, "_fetch_one", fake2)
+    r2 = refresh_actions(symbols=["LIVE"], today=date(2026, 7, 5), fresh_days=7)
+    assert r2.skipped_fresh == 0
+    assert fake2.calls["LIVE"] == 1
+
+
+def test_no_actions_symbol_answered_not_retried_and_fresh(wired):
+    con = wired.con
+    fake = _FakeFetch({"LIVE": ["no_actions"], "DEAD": ["no_data"]})
+    wired.monkeypatch.setattr(fetch, "_fetch_one", fake)
+    r = refresh_actions(today=date(2026, 7, 5), fresh_days=7)
+    assert r.no_actions == 1
+    assert r.no_data == 1
+    assert fake.calls["LIVE"] == 1        # answered once, NOT retried
+    assert fake.calls["DEAD"] == 2        # real miss retried
+    # LIVE now carries last_ok → freshness-eligible next run
+    row = con.execute(
+        "SELECT status, last_ok FROM yf_coverage WHERE symbol='LIVE'").fetchone()
+    assert row == ("no_actions", date(2026, 7, 5))
 
 
 def test_parked_symbol_reprobed_after_window(wired):
